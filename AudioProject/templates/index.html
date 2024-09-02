@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Recorder and Transcriber</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding-top: 50px; }
+        button { margin: 10px; padding: 10px 20px; font-size: 16px; }
+        #transcription { margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto; }
+        #recordingIndicator { 
+            width: 20px; 
+            height: 20px; 
+            border-radius: 50%; 
+            background-color: gray; 
+            display: inline-block; 
+            margin-left: 10px; 
+        }
+        #waveform { 
+            width: 500px; 
+            height: 100px; 
+            background-color: #f0f0f0; 
+            margin: 20px auto; 
+        }
+    </style>
+</head>
+<body>
+    <h1>Audio Recorder and Transcriber</h1>
+    <button id="recordButton">Record</button>
+    <button id="stopButton" disabled>Stop</button>
+    <button id="playButton" disabled>Play</button>
+    <button id="resetButton" disabled>Reset</button>
+    <button id="transcribeButton" disabled>Transcribe</button>
+    <div id="recordingIndicator"></div>
+    <canvas id="waveform"></canvas>
+    <audio id="audioPlayback" controls style="display: none;"></audio>
+    <div id="transcription"></div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioBlob;
+        let audioUrl;
+        let audioContext;
+        let analyser;
+        let dataArray;
+        let animationId;
+
+        const recordButton = document.getElementById('recordButton');
+        const stopButton = document.getElementById('stopButton');
+        const playButton = document.getElementById('playButton');
+        const resetButton = document.getElementById('resetButton');
+        const transcribeButton = document.getElementById('transcribeButton');
+        const audioPlayback = document.getElementById('audioPlayback');
+        const transcriptionDiv = document.getElementById('transcription');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const waveformCanvas = document.getElementById('waveform');
+        const canvasCtx = waveformCanvas.getContext('2d');
+
+        function drawWaveform() {
+            analyser.getByteTimeDomainData(dataArray);
+            canvasCtx.fillStyle = 'rgb(200, 200, 200)';
+            canvasCtx.fillRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+            canvasCtx.lineWidth = 2;
+            canvasCtx.strokeStyle = 'rgb(0, 0, 0)';
+            canvasCtx.beginPath();
+            const sliceWidth = waveformCanvas.width * 1.0 / dataArray.length;
+            let x = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = v * waveformCanvas.height / 2;
+                if (i === 0) {
+                    canvasCtx.moveTo(x, y);
+                } else {
+                    canvasCtx.lineTo(x, y);
+                }
+                x += sliceWidth;
+            }
+            canvasCtx.lineTo(waveformCanvas.width, waveformCanvas.height / 2);
+            canvasCtx.stroke();
+            animationId = requestAnimationFrame(drawWaveform);
+        }
+
+        recordButton.onclick = async () => {
+            audioChunks = [];
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+            mediaRecorder.onstop = () => {
+                audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayback.src = audioUrl;
+                
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recorded_audio.wav');
+                fetch('/save-recording', { method: 'POST', body: formData });
+            };
+            mediaRecorder.start();
+            recordButton.disabled = true;
+            stopButton.disabled = false;
+            playButton.disabled = true;
+            resetButton.disabled = true;
+            transcribeButton.disabled = true;
+            recordingIndicator.style.backgroundColor = 'red';
+
+            // Set up audio context and analyser for waveform
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+            analyser.fftSize = 2048;
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+            drawWaveform();
+        };
+
+        stopButton.onclick = () => {
+            mediaRecorder.stop();
+            recordButton.disabled = false;
+            stopButton.disabled = true;
+            playButton.disabled = false;
+            resetButton.disabled = false;
+            transcribeButton.disabled = false;
+            recordingIndicator.style.backgroundColor = 'gray';
+            cancelAnimationFrame(animationId);
+        };
+
+        playButton.onclick = () => {
+            audioPlayback.style.display = 'block';
+            audioPlayback.play();
+        };
+
+        resetButton.onclick = () => {
+            audioChunks = [];
+            audioBlob = null;
+            audioUrl = null;
+            audioPlayback.src = '';
+            audioPlayback.style.display = 'none';
+            playButton.disabled = true;
+            resetButton.disabled = true;
+            transcribeButton.disabled = true;
+            transcriptionDiv.innerHTML = '';
+            canvasCtx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+        };
+
+        transcribeButton.onclick = () => {
+            transcribeButton.disabled = true;
+            transcriptionDiv.innerHTML = 'Transcribing...';
+            fetch('/transcribe', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        transcriptionDiv.innerHTML = `Error: ${data.error}`;
+                    } else {
+                        transcriptionDiv.innerHTML = `
+                            <h3>Transcription:</h3>
+                            <p>${data.transcription}</p>
+                            <p>Time taken: ${data.time_taken}</p>
+                        `;
+                    }
+                    transcribeButton.disabled = false;
+                })
+                .catch(error => {
+                    transcriptionDiv.innerHTML = `Error: ${error.message}`;
+                    transcribeButton.disabled = false;
+                });
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Recorder</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding-top: 50px; }
+        button { margin: 10px; padding: 10px 20px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>Audio Recorder</h1>
+    <button id="recordButton">Record</button>
+    <button id="stopButton" disabled>Stop</button>
+    <button id="playButton" disabled>Play</button>
+    <button id="resetButton" disabled>Reset</button>
+    <audio id="audioPlayback" controls style="display: none;"></audio>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioBlob;
+        let audioUrl;
+
+        const recordButton = document.getElementById('recordButton');
+        const stopButton = document.getElementById('stopButton');
+        const playButton = document.getElementById('playButton');
+        const resetButton = document.getElementById('resetButton');
+        const audioPlayback = document.getElementById('audioPlayback');
+
+        recordButton.onclick = async () => {
+            audioChunks = [];
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+            mediaRecorder.onstop = () => {
+                audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayback.src = audioUrl;
+                
+                // Send the audio file to the server
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recorded_audio.wav');
+                fetch('/save-recording', { method: 'POST', body: formData });
+            };
+            mediaRecorder.start();
+            recordButton.disabled = true;
+            stopButton.disabled = false;
+            playButton.disabled = true;
+            resetButton.disabled = true;
+        };
+
+        stopButton.onclick = () => {
+            mediaRecorder.stop();
+            recordButton.disabled = false;
+            stopButton.disabled = true;
+            playButton.disabled = false;
+            resetButton.disabled = false;
+        };
+
+        playButton.onclick = () => {
+            audioPlayback.style.display = 'block';
+            audioPlayback.play();
+        };
+
+        resetButton.onclick = () => {
+            audioChunks = [];
+            audioBlob = null;
+            audioUrl = null;
+            audioPlayback.src = '';
+            audioPlayback.style.display = 'none';
+            playButton.disabled = true;
+            resetButton.disabled = true;
+        };
+    </script>
+</body>
+</html>
